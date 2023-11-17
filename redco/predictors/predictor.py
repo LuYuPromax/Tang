@@ -29,18 +29,21 @@ class Predictor:
                  pred_fn,
                  output_fn=None,
                  params_sharding_rules=None):
-        self._deployer = deployer
-        self._collate_fn = partial(collate_fn_wrapper, collate_fn=collate_fn)
+        """
+        初始化实例变量，处理输出函数，完成部署参数设置和参数初始化，包装预测函数，注意partial函数
+        """
+        self._deployer = deployer        #部署器对象，负责模型的部署和运行
+        self._collate_fn = partial(collate_fn_wrapper, collate_fn=collate_fn)     #数据组合函数的包装，用于将数据组合成批次
 
-        self._params_sharding_rules = params_sharding_rules
-        self._pred_fn = partial(
+        self._params_sharding_rules = params_sharding_rules   #参数分片规则
+        self._pred_fn = partial(                   #包装后的预测函数，用于执行实际的模型预测
             pred_fn_wrapper,
             pred_fn=pred_fn,
             under_pmap=self._deployer.mesh is None)
-        self._params_spec = None
-        self._p_pred_step = None
+        self._params_spec = None          #模型参数规范
+        self._p_pred_step = None          #预测时的时间步
 
-        if output_fn is None:
+        if output_fn is None:             #输出函数
             self._output_fn = default_output_fn
         else:
             self._output_fn = output_fn
@@ -50,20 +53,23 @@ class Predictor:
                            dummy_batch,
                            params,
                            params_sharding_rules):
-        if self._deployer.mesh is None:
+        """
+        设置运行步骤，根据部署器的情况选择使用jax.pmap或pjit进行批处理
+        """
+        if self._deployer.mesh is None:          #不在分布式环境下，可以使用jax.pmap进行批处理
             self._p_pred_step = jax.pmap(pred_fn, axis_name='batch')
         else:
-            data_spec = {
+            data_spec = {                        #指定数据划分方式
                 key: P(*(('dp',) + (None,) * (len(value.shape) - 1)))
                 for key, value in dummy_batch.items()
             }
 
-            self._params_spec = self._deployer.get_params_spec(
+            self._params_spec = self._deployer.get_params_spec(                 #获取模型参数划分方式规范
                 params=params, params_sharding_rules=params_sharding_rules)
 
             self._p_pred_step = pjit(
                 pred_fn,
-                in_shardings=(None, self._params_spec, data_spec),
+                in_shardings=(None, self._params_spec, data_spec),   #第一个参数无需划分，模型参数按照self._params_spec进行划分，数据按照data_spec划分
                 out_shardings=None)
 
     def predict(self,
@@ -72,11 +78,17 @@ class Predictor:
                 params,
                 params_meshed=False,
                 desc=''):
-        params = freeze(params)
+        """
+        用于执行预测任务，执行预测前进行一系列数据处理、模型参数处理、批处理操作
+        examples:数据列表
+        per_device_batch_size:每设备批次大小
+        params:模型参数
+        """
+        params = freeze(params)     #冻结参数，确保参数是不可变的，以便在后续的处理中不会被修改
 
-        raw_n_inputs = len(examples)
+        raw_n_inputs = len(examples)      #原始输入数据样本数量
         _, global_batch_size = self._deployer.process_batch_size(
-            per_device_batch_size=per_device_batch_size)
+            per_device_batch_size=per_device_batch_size)       #根据每设备批次大小计算全局批次大小
         examples = examples + [examples[0]] * (global_batch_size - 1)
         examples = add_idxes(examples=examples)
 
