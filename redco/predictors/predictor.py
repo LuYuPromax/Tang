@@ -87,14 +87,14 @@ class Predictor:
         params = freeze(params)     #冻结参数，确保参数是不可变的，以便在后续的处理中不会被修改
 
         raw_n_inputs = len(examples)      #原始输入数据样本数量
-        _, global_batch_size = self._deployer.process_batch_size(
+        _, global_batch_size = self._deployer.process_batch_size(     #_表示一个占位符，该变量的值后续并不会被使用到，因此我们不关心其取值
             per_device_batch_size=per_device_batch_size)       #根据每设备批次大小计算全局批次大小
-        examples = examples + [examples[0]] * (global_batch_size - 1)
-        examples = add_idxes(examples=examples)
+        examples = examples + [examples[0]] * (global_batch_size - 1)   #将examples复制并补齐，确保批次大小是全局批次大小的整数倍 
+        examples = add_idxes(examples=examples)  
 
-        params = self._deployer.process_to_run_model(params)
+        params = self._deployer.process_to_run_model(params)  #参数处理
 
-        data_batches = self._deployer.get_model_input_batches(
+        data_batches = self._deployer.get_model_input_batches(         #获取数据批次
             examples=examples,
             per_device_batch_size=per_device_batch_size,
             collate_fn=self._collate_fn,
@@ -104,32 +104,32 @@ class Predictor:
 
         preds = []
         for batch in data_batches:
-            if self._p_pred_step is None:
+            if self._p_pred_step is None:           #如果运行步骤尚未设置，则设置运行步骤
                 self.setup_running_step(
                     pred_fn=self._pred_fn,
                     dummy_batch=batch,
                     params=params,
                     params_sharding_rules=self._params_sharding_rules)
 
-            if (self._params_spec is not None) and (not params_meshed):
+            if (self._params_spec is not None) and (not params_meshed):   #如果存在参数分片规则并且尚未切分，调用shard_params函数进行参数分片
                 params = self._deployer.shard_params(
                     params=params, params_spec=self._params_spec)
                 params_meshed = True
 
-            pred_rng = self._deployer.process_to_run_model(
+            pred_rng = self._deployer.process_to_run_model(         #生成用于预测的随机数
                 self._deployer.gen_rng(), is_prng_key=True)
 
-            batch_preds_with_idxes = self._deployer.run_model_step(
+            batch_preds_with_idxes = self._deployer.run_model_step(   #执行定义运行步骤，得到带有序列的预测结果
                 step_fn=self._p_pred_step,
                 input_args=(pred_rng, params, batch))
 
-            batch_preds = self._deployer.process_batch_preds(
+            batch_preds = self._deployer.process_batch_preds(       #处理预测结果，得到带索引的预测结果？？
                 batch_preds_with_idxes=batch_preds_with_idxes)
-            batch_preds = jax.tree_util.tree_map(np.asarray, batch_preds)
+            batch_preds = jax.tree_util.tree_map(np.asarray, batch_preds)   #预测结果转化为numpy数组
 
             batch_preds = self._output_fn(batch_preds)
             assert isinstance(batch_preds, list) and \
-                   len(batch_preds) == global_batch_size
+                   len(batch_preds) == global_batch_size    #断言检查，确保输出函数返回的结果是一个列表，且长度等于全局批次大小
             preds.extend(batch_preds)
 
         return preds[:raw_n_inputs]
